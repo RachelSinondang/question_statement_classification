@@ -1,0 +1,199 @@
+---
+title: "Untitled"
+author: "Rachel Sinondang"
+date: "5/29/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+ # Data Wrangling
+library(tidyverse) 
+
+# Text analysis
+library(textclean)
+library(tidytext)
+library(tm)
+
+library(caret)
+library(e1071)
+library(rpart)
+library(RTextTools)
+library(tm)
+library(DMwR)
+```
+
+```{r}
+q_and_s <- read.csv("questions_vs_statements_v1.0.csv")
+```
+
+```{r message =FALSE, warning=FALSE}
+q_and_s_clean <- q_and_s %>%
+  mutate(doc = doc %>%
+      str_to_lower() %>% # transform menjadi huruf kecil
+      replace_url()  %>% 
+      replace_html() %>% 
+      str_remove_all("@([0-9a-zA-Z_]+)") %>% # remove username
+      str_remove_all("#([0-9a-zA-Z_]+)") %>% # remove hashtag
+      replace_contraction() %>%
+      replace_word_elongation() %>% 
+      replace_internet_slang() %>% 
+      replace_emoji(.) %>% 
+      replace_emoticon(.) %>% 
+      str_remove_all(pattern = "[[:digit:]]") %>% # remove number
+      str_remove_all(pattern = "[[:punct:]]") %>% 
+      str_remove_all(pattern = "%") %>% 
+      str_remove_all(pattern = "\\$") %>% # remove dollar sign
+      str_remove_all(pattern = "\\|") %>%
+      str_remove_all(pattern = "\\=") %>%
+      str_remove_all('[\\&]+') %>% 
+      str_remove_all('[\\"]+') %>% 
+      str_remove_all("<([0-9a-zA-Z_]+)>") %>%
+      str_remove_all(pattern = "\\>") %>%
+      str_remove_all(pattern = "\\<") %>%
+      str_squish()) %>%
+  na.omit() %>% # membuang baris bernilai NA
+  as.data.frame() %>% 
+  distinct() %>% # hanya keep data yang unik
+  mutate(label = as.factor(label),
+         target = as.factor(target))
+
+```
+
+
+```{r message =FALSE, warning=FALSE}
+library(rsample)
+set.seed(100)
+
+# split into train - test
+split_b <- initial_split(q_and_s_clean, prop =  0.3, strata = "target")
+q_and_s_clean1 <- training(split_b)
+qs_sisa <- testing(split_b)
+
+```
+
+```{r message=F}
+library(tm)
+
+# VCorpus requires a source object, which can be created using VectorSource
+qs.corpus <- VCorpus(VectorSource(q_and_s_clean1$doc))
+
+```
+
+```{r}
+# stemming
+qs.corpus <- tm_map(qs.corpus, content_transformer(textstem::lemmatize_words))
+
+qs.siap <- bind_cols(qs.corpus %>% sapply(as.character) %>%
+  as.data.frame(stringsAsFactors = FALSE), q_and_s_clean1[,2:3]) %>%
+  `colnames<-`(c("doc", "label", "target"))
+```
+
+```{r }
+library(rsample)
+RNGkind(sample.kind = "Rounding")
+set.seed(100)
+
+index <- sample(nrow(qs.siap), nrow(qs.siap)*0.75)
+
+train <- qs.siap[index, ]
+test <- qs.siap[-index, ]
+```
+
+```{r }
+library(rsample)
+RNGkind(sample.kind = "Rounding")
+set.seed(100)
+
+index_a <- sample(nrow(test), nrow(test)*0.3)
+
+val <- test[index_a, ]
+test_fin <- test[-index_a, ]
+```
+
+```{r}
+prop.table(table(train$label))
+```
+
+```{r }
+qs.train.dtm <- DocumentTermMatrix(VCorpus(VectorSource(train$doc)))
+
+qs.test.dtm <- DocumentTermMatrix(VCorpus(VectorSource(val$doc)))
+
+# cek data
+inspect(qs.train.dtm)
+```
+
+```{r }
+qs.train.dtm <- removeSparseTerms(qs.train.dtm, 0.995)
+
+```
+
+```{r}
+# fungsi DIY
+bernoulli_conv <- function(x){
+  x <- as.factor(ifelse(x > 0, 1, 0))
+  return(x)
+}
+
+```
+
+```{r}
+data_train_bn <- apply(X = qs.train.dtm, MARGIN = 2, FUN = bernoulli_conv)
+data_test_bn <- apply(X = qs.test.dtm, MARGIN = 2, FUN = bernoulli_conv)
+```
+
+```{r}
+library(e1071)
+# your code
+model_naive <- naiveBayes(x = data_train_bn, # data prediktor
+                          y = train[,"label"], # data target
+                          laplace = 1)
+
+
+```
+
+
+```{r}
+# your code
+qs_predClass <- predict(object = model_naive, 
+                         newdata = data_test_bn,
+                         type = "class")
+
+head(qs_predClass)
+```
+
+```{r}
+# your code
+library(caret)
+confusionMatrix(data = qs_predClass, # hasil prediksi
+                reference = val$label)
+```
+
+```{r}
+# saveRDS(model_naive, "md_naive.RDS")
+```
+
+```{r message =FALSE, warning=FALSE}
+qs_aa <- train %>% 
+  unnest_tokens(word, doc)%>%
+  mutate(word = textstem::lemmatize_words(word)) %>%
+  anti_join(stop_words) %>% 
+  count(word, label, sort = T) %>% 
+  group_by(label) %>% 
+  top_n(15)
+
+library(ggthemes)
+
+ggplot(qs_aa, aes(label = word)) +
+  ggwordcloud::geom_text_wordcloud(aes(size=n)) +
+  facet_wrap(~label, scales = "free_y") +
+  scale_size_area(max_size = 12) +
+  labs(title = "Wordcloud") +
+  theme_minimal()
+```
+
+
